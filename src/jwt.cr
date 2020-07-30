@@ -31,7 +31,13 @@ module JWT
     segments.join(".")
   end
 
-  def decode(token : String, key : String = "", algorithm : Algorithm = Algorithm::None, verify = true, validate = true, **opts) : Tuple
+  def decode(
+    token : String, key : String | OpenSSL::PKey::PKey = "",
+    algorithm : Algorithm = Algorithm::None,
+    verify = true,
+    validate = true,
+    **opts
+  ) : Tuple
     verify_data, _, encoded_signature = token.rpartition('.')
 
     count = verify_data.count('.')
@@ -43,14 +49,15 @@ module JWT
       # public key verification for RSA and ECDSA algorithms
       case algorithm
       when Algorithm::RS256, Algorithm::RS384, Algorithm::RS512
-        rsa = OpenSSL::PKey::RSA.new(key)
+        rsa = key.is_a?(String) ? OpenSSL::PKey::RSA.new(key) : key
         digest = OpenSSL::Digest.new("sha#{algorithm.to_s[2..-1]}")
         if !rsa.verify(digest, Base64.decode_string(encoded_signature), verify_data)
           raise VerificationError.new("Signature verification failed")
         end
       when Algorithm::ES256, Algorithm::ES384, Algorithm::ES512
-        dsa = OpenSSL::PKey::EC.new(key)
+        dsa = key.is_a?(String) ? OpenSSL::PKey::EC.new(key) : key
         digest = OpenSSL::Digest.new("sha#{algorithm.to_s[2..-1]}").update(verify_data).final
+        raise VerificationError.new("Key and algorithm don't match") if dsa.is_a?(OpenSSL::PKey::RSA)
         result = begin
           dsa.ec_verify(digest, raw_to_asn1(Base64.decode(encoded_signature), dsa))
         rescue e
@@ -58,6 +65,7 @@ module JWT
         end
         raise VerificationError.new("Signature verification failed") if !result
       else
+        raise VerificationError.new("Key and algorithm don't match") if key.is_a?(OpenSSL::PKey::PKey)
         expected_encoded_signature = encoded_signature(algorithm, key, verify_data)
         unless Crypto::Subtle.constant_time_compare(encoded_signature, expected_encoded_signature)
           raise VerificationError.new("Signature verification failed")
